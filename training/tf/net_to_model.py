@@ -26,5 +26,7 @@ with open(sys.argv[1], 'r') as f:
 tfprocess = TFProcess(blocks, channels)
 tfprocess.init(batch_size=1, gpus_num=1)
 tfprocess.replace_weights(weights)
-path = os.path.join(os.getcwd(), "leelaz-model")
-save_path = tfprocess.saver.save(tfprocess.session, path, global_step=0)
+path = os.path.join(os.getcwd(), "leelaz-model.pb")
+save_path = tfprocess.save_graph(path)
+
+#save_path = tfprocess.saver.save(tfprocess.session, path, global_step=0)

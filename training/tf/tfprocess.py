@@ -20,6 +20,8 @@ import math
 import numpy as np
 import os
 import tensorflow as tf
+from tensorflow.python.framework import graph_util
+
 import time
 import unittest
 
@@ -300,6 +302,7 @@ class TFProcess:
 
         # Build checkpoint saver
         self.saver = tf.train.Saver()
+    
 
         # Initialize all variables
         self.session.run(tf.global_variables_initializer())
@@ -398,6 +401,18 @@ class TFProcess:
                 self.assign(weights, new_weight)
         #This should result in identical file to the starting one
         #self.save_leelaz_weights('restored.txt')
+        
+    def save_graph(self, path):
+        graph = tf.get_default_graph()
+        input_graph_def = graph.as_graph_def()
+        print(input_graph_def)
+        output_node_names = ["swa_model/bin_inputs","swa_model/global_inputs","swa_model/include_history","swa_model/Tensordot/concat","swa_model/policy_output","swa_model/value_output"]
+        output_graph_def = graph_util.convert_variables_to_constants(self.session, input_graph_def, output_node_names)
+        # For some models, we would like to remove training nodes
+        output_graph_def = graph_util.remove_training_nodes(output_graph_def, protected_nodes=None)
+
+        with tf.gfile.GFile(path, 'wb') as f:
+            f.write(output_graph_def.SerializeToString())
 
     def restore(self, file):
         print("Restoring from {0}".format(file))
