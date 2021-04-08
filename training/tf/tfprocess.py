@@ -159,9 +159,9 @@ class TFProcess:
         self.macrobatch = macrobatch
         self.logbase = logbase
         # Input batch placeholders
-        self.planes = tf.placeholder([None,6498], dtype='tf.uint8', name='in_planes')
-        self.probs = tf.placeholder([None,362], dtype='tf.float32', name='in_probs')
-        self.winner = tf.placeholder([None,1], dtype='tf.float32', name='in_winner')
+        self.planes = tf.placeholder(dtype='tf.uint8', [None,6498],name='in_planes')
+        self.probs = tf.placeholder(dtype='tf.float32', [None,362],name='in_probs')
+        self.winner = tf.placeholder(dtype='tf.float32', [None,1], name='in_winner')
 
         # Mini-batches come as raw packed strings. Decode
         # into tensors to feed into network.
