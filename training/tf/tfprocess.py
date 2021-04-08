@@ -407,7 +407,7 @@ class TFProcess:
         graph = tf.get_default_graph()
         input_graph_def = graph.as_graph_def()
         #print(input_graph_def)
-        output_node_names = ["swa_model/bin_inputs","swa_model/global_inputs","swa_model/include_history","swa_model/Tensordot/concat","swa_model/policy_output","swa_model/value_output"]
+        output_node_names = ["fp32_storage/tower_0/policy_output","fp32_storage/tower_0/value_output"]
         output_graph_def = graph_util.convert_variables_to_constants(self.session, input_graph_def, output_node_names)
         # For some models, we would like to remove training nodes
         output_graph_def = graph_util.remove_training_nodes(output_graph_def, protected_nodes=None)
