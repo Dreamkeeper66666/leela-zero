@@ -636,7 +636,7 @@ class TFProcess:
         b_fc1 = bias_variable("b_fc_1", [(19 * 19) + 1], self.model_dtype)
         self.add_weights(W_fc1)
         self.add_weights(b_fc1)
-        h_fc1 = tf.add(tf.matmul(h_conv_pol_flat, W_fc1), b_fc1)
+        h_fc1 = tf.add(tf.matmul(h_conv_pol_flat, W_fc1), b_fc1, name="policy_output")
 
         # Value head
         conv_val = self.conv_block(flow, filter_size=1,
@@ -653,7 +653,7 @@ class TFProcess:
         b_fc3 = bias_variable("b_fc_3", [1], self.model_dtype)
         self.add_weights(W_fc3)
         self.add_weights(b_fc3)
-        h_fc3 = tf.nn.tanh(tf.add(tf.matmul(h_fc2, W_fc3), b_fc3))
+        h_fc3 = tf.nn.tanh(tf.add(tf.matmul(h_fc2, W_fc3), b_fc3), name = "value_output")
 
         return h_fc1, h_fc3
 
