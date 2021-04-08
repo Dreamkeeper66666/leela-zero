@@ -363,6 +363,7 @@ class TFProcess:
 
     def replace_weights(self, new_weights):
         for e, weights in enumerate(self.weights):
+            print(weights)
             if isinstance(weights, str):
                 weights = tf.get_default_graph().get_tensor_by_name(weights)
             if weights.name.endswith('/batch_normalization/beta:0'):
@@ -405,7 +406,7 @@ class TFProcess:
     def save_graph(self, path):
         graph = tf.get_default_graph()
         input_graph_def = graph.as_graph_def()
-        print(input_graph_def)
+        #print(input_graph_def)
         output_node_names = ["swa_model/bin_inputs","swa_model/global_inputs","swa_model/include_history","swa_model/Tensordot/concat","swa_model/policy_output","swa_model/value_output"]
         output_graph_def = graph_util.convert_variables_to_constants(self.session, input_graph_def, output_node_names)
         # For some models, we would like to remove training nodes
