@@ -21,6 +21,7 @@ import numpy as np
 import os
 import tensorflow as tf
 from tensorflow.python.framework import graph_util
+from tensorflow.python.tools import freeze_graph
 
 import time
 import unittest
@@ -159,15 +160,15 @@ class TFProcess:
         self.macrobatch = macrobatch
         self.logbase = logbase
         # Input batch placeholders
-        self.planes = tf.placeholder(dtype='tf.uint8', [None,6498],name='in_planes')
-        self.probs = tf.placeholder(dtype='tf.float32', [None,362],name='in_probs')
-        self.winner = tf.placeholder(dtype='tf.float32', [None,1], name='in_winner')
+        self.planes = tf.placeholder(dtype=tf.uint8, shape = [None,6498],name='in_planes')
+        self.probs = tf.placeholder(dtype=tf.float32,shape = [None,362],name='in_probs')
+        self.winner = tf.placeholder(dtype=tf.float32, shape = [None,1], name='in_winner')
 
         # Mini-batches come as raw packed strings. Decode
         # into tensors to feed into network.
-        planes = tf.decode_raw(self.planes, tf.uint8)
-        probs = tf.decode_raw(self.probs, tf.float32)
-        winner = tf.decode_raw(self.winner, tf.float32)
+        planes = self.planes
+        probs = self.probs
+        winner = self.winner
 
         planes = tf.cast(planes, self.model_dtype)
 
@@ -404,9 +405,26 @@ class TFProcess:
         #self.save_leelaz_weights('restored.txt')
         
     def save_graph(self, path):
+
+        tf.train.write_graph(self.session.graph_def,"./","frozen_graph.pbtxt", as_text=True)
+        freeze_graph.freeze_graph(input_graph="frozen_graph.pbtxt",
+         input_saver='', input_binary=False, 
+         input_checkpoint=path, 
+         output_node_names=["fp32_storage/tower_0/policy_output","fp32_storage/tower_0/value_output"],
+         restore_op_name='save/restore_all', 
+         filename_tensor_name='save/Const:0', 
+         output_graph="frozen.pb", clear_devices=True,
+        initializer_nodes='')
+
+
+
+
+        '''
         graph = tf.get_default_graph()
         input_graph_def = graph.as_graph_def()
         #print(input_graph_def)
+        for node in input_graph_def.node:
+          print(node.name)
         output_node_names = ["fp32_storage/tower_0/policy_output","fp32_storage/tower_0/value_output"]
         output_graph_def = graph_util.convert_variables_to_constants(self.session, input_graph_def, output_node_names)
         # For some models, we would like to remove training nodes
@@ -414,6 +432,7 @@ class TFProcess:
 
         with tf.gfile.GFile(path, 'wb') as f:
             f.write(output_graph_def.SerializeToString())
+        '''
 
     def restore(self, file):
         print("Restoring from {0}".format(file))
