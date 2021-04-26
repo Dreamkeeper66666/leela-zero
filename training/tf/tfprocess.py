@@ -22,6 +22,7 @@ import os
 import tensorflow as tf
 from tensorflow.python.framework import graph_util
 
+
 import time
 import unittest
 
@@ -151,7 +152,7 @@ class TFProcess:
         config = tf.ConfigProto(gpu_options=gpu_options, allow_soft_placement=True)
         self.session = tf.Session(config=config)
 
-        self.training = tf.placeholder(tf.bool)
+        #self.training = tf.placeholder(tf.bool,shape=[1], Name)
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
 
     def init(self, batch_size, macrobatch=1, gpus_num=None, logbase='leelalogs'):
@@ -159,15 +160,15 @@ class TFProcess:
         self.macrobatch = macrobatch
         self.logbase = logbase
         # Input batch placeholders
-        self.planes = tf.placeholder(dtype='tf.uint8', [None,6498],name='in_planes')
-        self.probs = tf.placeholder(dtype='tf.float32', [None,362],name='in_probs')
-        self.winner = tf.placeholder(dtype='tf.float32', [None,1], name='in_winner')
+        self.planes = tf.placeholder(tf.uint8, shape=[6498] , name='in_planes')
+        self.probs = tf.placeholder(tf.float32, shape=[362] , name='in_probs')
+        self.winner = tf.placeholder(tf.float32, shape=[1] , name='in_winner')
 
         # Mini-batches come as raw packed strings. Decode
         # into tensors to feed into network.
-        planes = tf.decode_raw(self.planes, tf.uint8)
-        probs = tf.decode_raw(self.probs, tf.float32)
-        winner = tf.decode_raw(self.winner, tf.float32)
+        planes = self.planes
+        probs = self.probs
+        winner = self.winner
 
         planes = tf.cast(planes, self.model_dtype)
 
