@@ -17,7 +17,7 @@
 #    along with Leela Zero.  If not, see <http://www.gnu.org/licenses/>.
 
 
-from tfprocess import TFProcess
+from pdprocess import PDProcess
 from chunkparser import ChunkParser
 import argparse
 import glob
@@ -27,7 +27,7 @@ import os
 import random
 import shufflebuffer as sb
 import sys
-import tensorflow as tf
+#import tensorflow as tf
 import time
 import unittest
 
@@ -155,25 +155,26 @@ def main():
         len(training), len(test)))
 
     train_parser = ChunkParser(FileDataSrc(training),
-                               shuffle_size=1<<20, # 2.2GB of RAM.
+                               shuffle_size=1<<10, # 2.2GB of RAM.
                                sample=args.sample,
                                batch_size=RAM_BATCH_SIZE).parse()
 
     test_parser = ChunkParser(FileDataSrc(test),
-                              shuffle_size=1<<19,
+                              shuffle_size=1<<9,
                               sample=args.sample,
                               batch_size=RAM_BATCH_SIZE).parse()
-
-    tfprocess = TFProcess(blocks, filters)
-    tfprocess.init(RAM_BATCH_SIZE,
-                   logbase=args.logbase,
-                   macrobatch=BATCH_SIZE // RAM_BATCH_SIZE)
+    
+    pdprocess = PDProcess(blocks,filters,RAM_BATCH_SIZE)
+    #tfprocess = TFProcess(blocks, filters)
+    #tfprocess.init(RAM_BATCH_SIZE,
+    #               logbase=args.logbase,
+    #               macrobatch=BATCH_SIZE // RAM_BATCH_SIZE)
 
     #benchmark1(tfprocess)
 
-    if restore_prefix:
-        tfprocess.restore(restore_prefix)
-    tfprocess.process(train_parser, test_parser)
+    #if restore_prefix:
+    #    tfprocess.restore(restore_prefix)
+    pdprocess.process(train_parser, test_parser)
 
 if __name__ == "__main__":
     mp.set_start_method('spawn')
