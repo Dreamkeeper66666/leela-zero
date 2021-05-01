@@ -15,15 +15,19 @@
 #
 #    You should have received a copy of the GNU General Public License
 #    along with Leela Zero.  If not, see <http://www.gnu.org/licenses/>.
-
+import warnings
+warnings.filterwarnings('ignore')
 import math
 import numpy as np
 import os
 import paddle as pd
+device = pd.set_device('gpu')
 import time
 import unittest
+pd.disable_static()
 
-from mixprec import float32_variable_storage_getter, LossScalingOptimizer
+
+#from mixprec import float32_variable_storage_getter, LossScalingOptimizer
 
 '''
 def optimistic_restore(session, save_file, graph=tf.get_default_graph()):
@@ -301,15 +305,16 @@ class PDProcess:
 
     def restore(self, file):
         print("Restoring from {0}".format(file))
-        optimistic_restore(self.session, file)
+        params = paddle.load(file)
+        self.model.set_dict(params, use_structured_name=False)
 
     def measure_loss(self, model, batch, training=False):
-        planes = np.array(list(batch[0]))
-        planes = np.reshape(planes,[-1,18,19,19])
+        planes = np.frombuffer(batch[0], dtype=np.uint8)
+        planes = np.reshape(planes,[self.batch_size,18,19,19])
         probs =  np.frombuffer(batch[1], dtype=np.float32)
-        probs = np.reshape(probs,[-1,362])
+        probs = np.reshape(probs,[self.batch_size,362])
         winner = np.frombuffer(batch[2], dtype=np.float32)
-        winner = np.reshape(winner,[-1,1])
+        winner = np.reshape(winner,[self.batch_size,1])
 
         planes_t = paddle.to_tensor(planes,dtype='float32')
         probs_t = paddle.to_tensor(probs,dtype='float32')
@@ -320,18 +325,19 @@ class PDProcess:
         value_loss = F.mse_loss(value, winner_t)
         probs_max = paddle.argmax(probs_t,axis=1,keepdim=True)
         acc = paddle.metric.accuracy(policy, probs_max)
-        loss = paddle.add(policy_loss, value_loss)
-        loss.backward()
+        if training:
+            loss = paddle.add(policy_loss, value_loss)
+            loss.backward()
 
         # Google's paper scales mse by 1/4 to a [0,1] range, so we do the same here
         return {'policy': policy_loss.numpy(), 'mse': value_loss.numpy()/4., 
                 'accuracy':acc.numpy(), 'total': policy_loss.numpy()+value_loss.numpy()}
 
     def process(self, train_data, test_data):
-        info_steps=100
+        info_steps=50
         stats = Stats()
         timer = Timer()
-        optim = paddle.optimizer.Adam(learning_rate=0.005, parameters=self.model.parameters(),weight_decay=self.l2_scale)
+        optim = paddle.optimizer.Adam(learning_rate=0.0005, parameters=self.model.parameters(),weight_decay=self.l2_scale)
         steps = 0
         while True:
             batch = next(train_data)
@@ -349,7 +355,7 @@ class PDProcess:
                     stats.mean('total'), speed))
                 stats.clear()
 
-            if steps % 100 == 0 and steps !=0 :
+            if steps % 4000 == 0 and steps !=0 :
                 test_stats = Stats()
                 test_batches = 80 # reduce sample mean variance by ~28x
                 for _ in range(0, test_batches):
@@ -365,9 +371,6 @@ class PDProcess:
                 # Write out current model and checkpoint
                 path = os.path.join(os.getcwd(), "leelaz-model.pdparams")
                 state_dict = self.model.state_dict()
-                for key in state_dict.keys():
-                    print(key)
-
                 paddle.save(state_dict, path)
 
                 print("Model saved in file: {}".format(path))

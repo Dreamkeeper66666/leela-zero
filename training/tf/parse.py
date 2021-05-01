@@ -172,8 +172,8 @@ def main():
 
     #benchmark1(tfprocess)
 
-    #if restore_prefix:
-    #    tfprocess.restore(restore_prefix)
+    if restore_prefix:
+        pdprocess.restore(restore_prefix)
     pdprocess.process(train_parser, test_parser)
 
 if __name__ == "__main__":
