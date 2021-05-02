@@ -180,7 +180,9 @@ class PDProcess:
         self.residual_filters = residual_filters
         self.model = ResNet(residual_blocks, residual_filters)
         self.l2_scale = 1e-4
-        self.optim = paddle.optimizer.Adam(learning_rate=0.001, parameters=self.model.parameters(),weight_decay=self.l2_scale)
+        self.optim = paddle.optimizer.Momentum(learning_rate=0.00005, parameters=self.model.parameters(), momentum=0.9, use_nesterov=True, weight_decay=self.l2_scale)
+
+        #self.optim = paddle.optimizer.Adam(learning_rate=0.001, parameters=self.model.parameters(),weight_decay=self.l2_scale)
 
         self.batch_size = batch_size
         paddle.summary(self.model,(-1,18,19,19))
@@ -219,7 +221,7 @@ class PDProcess:
     def restore(self, file):
         print("Restoring from {0}".format(file))
         params = paddle.load(file)
-        opt_state_dict = paddle.load("adam.pdopt")
+        opt_state_dict = paddle.load("momentum.pdopt")
         self.model.set_state_dict(params)
         self.optim.set_state_dict(opt_state_dict)
 
@@ -237,6 +239,10 @@ class PDProcess:
         planes_t = paddle.to_tensor(planes,dtype='float32')
         probs_t = paddle.to_tensor(probs,dtype='float32')
         winner_t = paddle.to_tensor(winner,dtype='float32')
+
+        #planes_t = paddle.reshape(planes_t, shape=[self.batch_size,18,19,19])
+        #probs_t = paddle.reshape(probs_t,[self.batch_size,362])
+        #winner_t = paddle.reshape(winner_t,[self.batch_size,1])
         
 
         policy, value = model(planes_t)
@@ -245,7 +251,7 @@ class PDProcess:
         probs_max = paddle.argmax(probs_t,axis=1,keepdim=True)
         acc = paddle.metric.accuracy(policy, probs_max)
         if training:
-            loss = paddle.add(policy_loss, value_loss)
+            loss = policy_loss+value_loss
             loss.backward()
 
         # Google's paper scales mse by 1/4 to a [0,1] range, so we do the same here
@@ -291,7 +297,7 @@ class PDProcess:
                 path = os.path.join(os.getcwd(), "leelaz-model.pdparams")
                 state_dict = self.model.state_dict()
                 paddle.save(state_dict, path)
-                paddle.save(self.optim.state_dict(), "adam.pdopt")
+                paddle.save(self.optim.state_dict(), "momentum.pdopt")
 
                 print("Model saved in file: {}".format(path))
                 leela_path = path + "-" + str(steps) + ".txt"
