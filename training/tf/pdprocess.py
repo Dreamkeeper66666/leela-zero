@@ -27,24 +27,6 @@ import unittest
 pd.disable_static()
 
 
-#from mixprec import float32_variable_storage_getter, LossScalingOptimizer
-
-'''
-def optimistic_restore(session, save_file, graph=tf.get_default_graph()):
-    reader = tf.train.NewCheckpointReader(save_file)
-    saved_shapes = reader.get_variable_to_shape_map()
-    var_names = sorted(
-        [(var.name, var.name.split(':')[0]) for var in tf.global_variables()
-         if var.name.split(':')[0] in saved_shapes])
-    restore_vars = []
-    for var_name, saved_var_name in var_names:
-        curr_var = graph.get_tensor_by_name(var_name)
-        var_shape = curr_var.get_shape().as_list()
-        if var_shape == saved_shapes[saved_var_name]:
-            restore_vars.append(curr_var)
-    opt_saver = tf.train.Saver(restore_vars)
-    opt_saver.restore(session, save_file)
-'''
 
 # Class holding statistics
 class Stats:
@@ -232,79 +214,7 @@ class PDProcess:
         # Recalculate SWA weight batchnorm means and variances
         self.swa_recalc_bn = True
 
-        #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.8)
-        #config = tf.ConfigProto(gpu_options=gpu_options, allow_soft_placement=True)
-        #self.session = tf.Session(config=config)
 
-    def tower_loss(self, x, y_, z_):
-        y_conv, z_conv = self.construct_net(x)
-
-        # Cast the nn result back to fp32 to avoid loss overflow/underflow
-        if self.model_dtype != tf.float32:
-            y_conv = tf.cast(y_conv, tf.float32)
-            z_conv = tf.cast(z_conv, tf.float32)
-
-        # Calculate loss on policy head
-        cross_entropy = \
-            tf.nn.softmax_cross_entropy_with_logits(labels=y_,
-                                                    logits=y_conv)
-        policy_loss = tf.reduce_mean(cross_entropy)
-
-        # Loss on value head
-        mse_loss = \
-            tf.reduce_mean(tf.squared_difference(z_, z_conv))
-
-        # Regularizer
-        reg_variables = tf.get_collection(tf.GraphKeys.WEIGHTS)
-        reg_term = self.l2_scale * tf.add_n(
-            [tf.cast(tf.nn.l2_loss(v), tf.float32) for v in reg_variables])
-
-        # For training from a (smaller) dataset of strong players, you will
-        # want to reduce the factor in front of self.mse_loss here.
-        loss = 1.0 * policy_loss + 1.0 * mse_loss + reg_term
-
-        return loss, policy_loss, mse_loss, reg_term, y_conv
-
-    def replace_weights(self, new_weights):
-        for e, weights in enumerate(self.weights):
-            if isinstance(weights, str):
-                weights = tf.get_default_graph().get_tensor_by_name(weights)
-            if weights.name.endswith('/batch_normalization/beta:0'):
-                # Batch norm beta is written as bias before the batch
-                # normalization in the weight file for backwards
-                # compatibility reasons.
-                bias = tf.constant(new_weights[e], shape=weights.shape)
-                # Weight file order: bias, means, variances
-                var = tf.constant(new_weights[e + 2], shape=weights.shape)
-                new_beta = tf.divide(bias, tf.sqrt(var + tf.constant(1e-5)))
-                self.assign(weights, new_beta)
-            elif weights.shape.ndims == 4:
-                # Convolution weights need a transpose
-                #
-                # TF (kYXInputOutput)
-                # [filter_height, filter_width, in_channels, out_channels]
-                #
-                # Leela/cuDNN/Caffe (kOutputInputYX)
-                # [output, input, filter_size, filter_size]
-                s = weights.shape.as_list()
-                shape = [s[i] for i in [3, 2, 0, 1]]
-                new_weight = tf.constant(new_weights[e], shape=shape)
-                self.assign(weights, tf.transpose(new_weight, [2, 3, 1, 0]))
-            elif weights.shape.ndims == 2:
-                # Fully connected layers are [in, out] in TF
-                #
-                # [out, in] in Leela
-                #
-                s = weights.shape.as_list()
-                shape = [s[i] for i in [1, 0]]
-                new_weight = tf.constant(new_weights[e], shape=shape)
-                self.assign(weights, tf.transpose(new_weight, [1, 0]))
-            else:
-                # Biases, batchnorm etc
-                new_weight = tf.constant(new_weights[e], shape=weights.shape)
-                self.assign(weights, new_weight)
-        #This should result in identical file to the starting one
-        #self.save_leelaz_weights('restored.txt')
 
     def restore(self, file):
         print("Restoring from {0}".format(file))
@@ -395,44 +305,6 @@ class PDProcess:
                 print("Model saved in file: {}".format(path))
 
             steps += 1
-
-
-    def save_leelaz_weights(self, filename):
-        with open(filename, "w") as file:
-            # Version tag
-            file.write("1")
-            for weights in self.weights:
-                # Newline unless last line (single bias)
-                file.write("\n")
-                work_weights = None
-                if weights.name.endswith('/batch_normalization/beta:0'):
-                    # Batch norm beta needs to be converted to biases before
-                    # the batch norm for backwards compatibility reasons
-                    var_key = weights.name.replace('beta', 'moving_variance')
-                    var = tf.get_default_graph().get_tensor_by_name(var_key)
-                    work_weights = tf.multiply(weights,
-                                               tf.sqrt(var + tf.constant(1e-5)))
-                elif weights.shape.ndims == 4:
-                    # Convolution weights need a transpose
-                    #
-                    # TF (kYXInputOutput)
-                    # [filter_height, filter_width, in_channels, out_channels]
-                    #
-                    # Leela/cuDNN/Caffe (kOutputInputYX)
-                    # [output, input, filter_size, filter_size]
-                    work_weights = tf.transpose(weights, [3, 2, 0, 1])
-                elif weights.shape.ndims == 2:
-                    # Fully connected layers are [in, out] in TF
-                    #
-                    # [out, in] in Leela
-                    #
-                    work_weights = tf.transpose(weights, [1, 0])
-                else:
-                    # Biases, batchnorm etc
-                    work_weights = weights
-                nparray = work_weights.numpy()
-                wt_str = [str(wt) for wt in np.ravel(nparray)]
-                file.write(" ".join(wt_str))
 
     def get_batchnorm_key(self):
         result = "bn" + str(self.batch_norm_count)
