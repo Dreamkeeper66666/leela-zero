@@ -21,7 +21,7 @@ import math
 import numpy as np
 import os
 import paddle as pd
-device = pd.set_device('gpu')
+#device = pd.set_device('gpu')
 import time
 import unittest
 pd.disable_static()
@@ -197,6 +197,9 @@ class PDProcess:
         self.residual_blocks = residual_blocks
         self.residual_filters = residual_filters
         self.model = ResNet(residual_blocks, residual_filters)
+        self.l2_scale = 1e-4
+        self.optim = paddle.optimizer.Adam(learning_rate=0.001, parameters=self.model.parameters(),weight_decay=self.l2_scale)
+
         self.batch_size = batch_size
         paddle.summary(self.model,(-1,18,19,19))
 
@@ -207,7 +210,7 @@ class PDProcess:
         self.loss_scale = 1 if self.model_dtype == 'float32' else 128
 
         # L2 regularization parameter applied to weights.
-        self.l2_scale = 1e-4
+
 
         # Set number of GPUs for training
         self.gpus_num = 1
@@ -306,11 +309,16 @@ class PDProcess:
     def restore(self, file):
         print("Restoring from {0}".format(file))
         params = paddle.load(file)
-        self.model.set_dict(params, use_structured_name=False)
+        opt_state_dict = paddle.load("adam.pdopt")
+        self.model.set_state_dict(params)
+        self.optim.set_state_dict(opt_state_dict)
+
+        
 
     def measure_loss(self, model, batch, training=False):
-        planes = np.frombuffer(batch[0], dtype=np.uint8)
+        planes = np.frombuffer(batch[0], dtype=np.uint8).astype(np.float32)
         planes = np.reshape(planes,[self.batch_size,18,19,19])
+
         probs =  np.frombuffer(batch[1], dtype=np.float32)
         probs = np.reshape(probs,[self.batch_size,362])
         winner = np.frombuffer(batch[2], dtype=np.float32)
@@ -319,9 +327,10 @@ class PDProcess:
         planes_t = paddle.to_tensor(planes,dtype='float32')
         probs_t = paddle.to_tensor(probs,dtype='float32')
         winner_t = paddle.to_tensor(winner,dtype='float32')
+        
 
         policy, value = model(planes_t)
-        policy_loss = F.cross_entropy(policy, probs_t,soft_label=True)
+        policy_loss = F.softmax_with_cross_entropy(logits=policy, label=probs_t, soft_label=True)
         value_loss = F.mse_loss(value, winner_t)
         probs_max = paddle.argmax(probs_t,axis=1,keepdim=True)
         acc = paddle.metric.accuracy(policy, probs_max)
@@ -337,15 +346,15 @@ class PDProcess:
         info_steps=50
         stats = Stats()
         timer = Timer()
-        optim = paddle.optimizer.Adam(learning_rate=0.0005, parameters=self.model.parameters(),weight_decay=self.l2_scale)
+        
         steps = 0
         while True:
             batch = next(train_data)
             # Measure losses and compute gradients for this batch.
             losses = self.measure_loss(self.model, batch, training=True)
             stats.add(losses)
-            optim.step()
-            optim.clear_grad()
+            self.optim.step()
+            self.optim.clear_grad()
             # fetch the current global step.
 
             if steps % info_steps == 0:
@@ -355,7 +364,7 @@ class PDProcess:
                     stats.mean('total'), speed))
                 stats.clear()
 
-            if steps % 4000 == 0 and steps !=0 :
+            if steps % 2000 == 0 and steps !=0 :
                 test_stats = Stats()
                 test_batches = 80 # reduce sample mean variance by ~28x
                 for _ in range(0, test_batches):
@@ -372,6 +381,7 @@ class PDProcess:
                 path = os.path.join(os.getcwd(), "leelaz-model.pdparams")
                 state_dict = self.model.state_dict()
                 paddle.save(state_dict, path)
+                paddle.save(self.optim.state_dict(), "adam.pdopt")
 
                 print("Model saved in file: {}".format(path))
                 leela_path = path + "-" + str(steps) + ".txt"
