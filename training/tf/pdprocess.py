@@ -24,6 +24,7 @@ import paddle as pd
 #device = pd.set_device('gpu')
 import time
 import unittest
+import sys
 pd.disable_static()
 
 
@@ -68,18 +69,24 @@ class Timer:
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
+from paddle import ParamAttr
 
 # 首先实现中间两个卷积层，Skip Connection 1x1 卷积层的残差模块。代码如下：
 # 残差模块
 
 class Conv_Block(nn.Layer):
-    def __init__(self, in_channel, out_channel,  kernel_size=3, stride=1, padding='SAME'):
+    def __init__(self, in_channel, out_channel,  kernel_size=3, stride=1, padding='SAME', relu = True):
         super(Conv_Block, self).__init__()
         
         # 第一个卷积单元
         self.conv1 = nn.Conv2D(in_channel, out_channel, kernel_size=kernel_size, padding=padding, stride=stride)
-        self.bn1 = nn.BatchNorm2D(out_channel)
-        self.relu = nn.ReLU()
+        self.bn1 = nn.BatchNorm(out_channel,momentum=0.99,
+            param_attr=ParamAttr(trainable=True),
+            bias_attr=ParamAttr(trainable=True),
+            use_global_stats=True)
+
+        #self.bn1 = nn.BatchNorm2D(out_channel)
+        self.relu = relu
         
 
     def forward(self, x):
@@ -87,36 +94,34 @@ class Conv_Block(nn.Layer):
         # [b, c, h, w], 通过第一个卷积单元
         out = self.conv1(x)
         out = self.bn1(out)
-        out = self.relu(out)
+        if self.relu:
+            out = F.relu(out)
 
         return out
 
 class Res_Block(nn.Layer):
-    def __init__(self, in_channel, out_channel, stride=1):
+    def __init__(self, in_channel, out_channel, stride=1, padding='SAME'):
         super(Res_Block, self).__init__()
         
         # 第一个卷积单元
-        self.conv1 = nn.Conv2D(in_channel, out_channel, kernel_size=3, padding=1, stride=stride)
-        self.bn1 = nn.BatchNorm2D(out_channel)
-        self.relu = nn.ReLU()
+        self.conv1 = Conv_Block(out_channel,out_channel, kernel_size=3, stride=1, padding = padding)
+        #self.bn1 = nn.BatchNorm2D(out_channel)
 
         # 第二个卷积单元
-        self.conv2 = nn.Conv2D(out_channel, out_channel, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2D(out_channel)
+        self.conv2 = Conv_Block(out_channel,out_channel, kernel_size=3, stride=1, padding = padding, relu=False)
+
+        #self.bn2 = nn.BatchNorm2D(out_channel)
 
     def forward(self, x):
         # 前向计算
         # [b, c, h, w], 通过第一个卷积单元
         out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
         # 通过第二个卷积单元
         out = self.conv2(out)
-        out = self.bn2(out)
-        #  2 条路径输出直接相加,然后输入激活函数
-        output = F.relu(out + x)
 
-        return output
+        #  2 条路径输出直接相加,然后输入激活函数
+
+        return out
 
 def build_trunk(in_channel, out_channel, num_layers):
 
@@ -137,7 +142,9 @@ class ResNet(nn.Layer):
         self.flow = Conv_Block(in_channel=18, out_channel=residual_filters, kernel_size=3, 
             stride=1, padding='SAME')# 第一层卷积,x:[b,18,256,256]
   
-        self.trunk = build_trunk(residual_filters, residual_filters, residual_blocks) # x:[b,256,19,19]
+        self.trunk = nn.Sequential(*[
+                Res_Block(residual_filters, residual_filters)
+                for _ in range(residual_blocks)])
         # policy head
 
         self.conv_pol =  Conv_Block(in_channel=residual_filters, out_channel=2, kernel_size=1, 
@@ -153,6 +160,8 @@ class ResNet(nn.Layer):
         self.fc_val_2 = nn.Linear(in_features=256,out_features=1)
   
         self.flatten = nn.Flatten()
+        self.tanh = nn.Tanh()
+        self.relu = nn.ReLU()
 
 
     def forward(self, inputs):
@@ -169,7 +178,9 @@ class ResNet(nn.Layer):
         val = self.conv_val(x)
         val = self.flatten(val)
         val = self.fc_val_1(val)
-        value_output = self.fc_val_2(val)
+        val = self.relu(val)
+        val = self.fc_val_2(val)
+        value_output = self.tanh(val)
 
         return policy_output, value_output
 
@@ -180,9 +191,9 @@ class PDProcess:
         self.residual_filters = residual_filters
         self.model = ResNet(residual_blocks, residual_filters)
         self.l2_scale = 1e-4
-        self.optim = paddle.optimizer.Momentum(learning_rate=0.00005, parameters=self.model.parameters(), momentum=0.9, use_nesterov=True, weight_decay=self.l2_scale)
+        #self.optim = paddle.optimizer.Momentum(learning_rate=0.005, parameters=self.model.parameters(), momentum=0.9, use_nesterov=True, weight_decay=self.l2_scale)
 
-        #self.optim = paddle.optimizer.Adam(learning_rate=0.001, parameters=self.model.parameters(),weight_decay=self.l2_scale)
+        self.optim = paddle.optimizer.Adam(learning_rate=0.001, parameters=self.model.parameters(),weight_decay=self.l2_scale)
 
         self.batch_size = batch_size
         paddle.summary(self.model,(-1,18,19,19))
@@ -230,6 +241,7 @@ class PDProcess:
     def measure_loss(self, model, batch, training=False):
         planes = np.frombuffer(batch[0], dtype=np.uint8).astype(np.float32)
         planes = np.reshape(planes,[self.batch_size,18,19,19])
+        #print(planes[0][0])
 
         probs =  np.frombuffer(batch[1], dtype=np.float32)
         probs = np.reshape(probs,[self.batch_size,362])
@@ -239,6 +251,7 @@ class PDProcess:
         planes_t = paddle.to_tensor(planes,dtype='float32')
         probs_t = paddle.to_tensor(probs,dtype='float32')
         winner_t = paddle.to_tensor(winner,dtype='float32')
+        
 
         #planes_t = paddle.reshape(planes_t, shape=[self.batch_size,18,19,19])
         #probs_t = paddle.reshape(probs_t,[self.batch_size,362])
@@ -246,13 +259,32 @@ class PDProcess:
         
 
         policy, value = model(planes_t)
+        #print(probs_t[0])
+        #print(winner_t[0])
+        #sys.exit()
         policy_loss = F.softmax_with_cross_entropy(logits=policy, label=probs_t, soft_label=True)
         value_loss = F.mse_loss(value, winner_t)
         probs_max = paddle.argmax(probs_t,axis=1,keepdim=True)
         acc = paddle.metric.accuracy(policy, probs_max)
         if training:
-            loss = policy_loss+value_loss
+            loss = policy_loss + value_loss
             loss.backward()
+         
+        else:
+            test_array = np.zeros((1,18,19,19))
+            test_array[:,17,:,:] =  np.ones((1,19,19))
+            test_t = paddle.to_tensor(test_array,dtype='float32')
+            model.eval()
+            policy, value = model(test_t)
+            p = F.softmax(policy).numpy()[:,:-1].reshape(19,19)
+            pb = p > 0.01
+            print(np.array(pb, dtype=np.int))
+
+            print(F.tanh(value))
+    
+
+
+
 
         # Google's paper scales mse by 1/4 to a [0,1] range, so we do the same here
         return {'policy': policy_loss.numpy(), 'mse': value_loss.numpy()/4., 
@@ -265,6 +297,7 @@ class PDProcess:
         
         steps = 0
         while True:
+            self.model.train()
             batch = next(train_data)
             # Measure losses and compute gradients for this batch.
             losses = self.measure_loss(self.model, batch, training=True)
@@ -280,7 +313,15 @@ class PDProcess:
                     stats.mean('total'), speed))
                 stats.clear()
 
-            if steps % 2000 == 0 and steps !=0 :
+            if steps % 1000 == 0 and steps !=0 :
+                # Write out current model and checkpoint
+                path = os.path.join(os.getcwd(), "leelaz-model.pdparams")
+                state_dict = self.model.state_dict()
+                paddle.save(state_dict, path)
+                paddle.save(self.optim.state_dict(), "momentum.pdopt")
+
+                self.model.eval()
+
                 test_stats = Stats()
                 test_batches = 80 # reduce sample mean variance by ~28x
                 for _ in range(0, test_batches):
@@ -293,11 +334,7 @@ class PDProcess:
                         test_stats.mean('accuracy')*100.0,
                         test_stats.mean('mse')))
 
-                # Write out current model and checkpoint
-                path = os.path.join(os.getcwd(), "leelaz-model.pdparams")
-                state_dict = self.model.state_dict()
-                paddle.save(state_dict, path)
-                paddle.save(self.optim.state_dict(), "momentum.pdopt")
+
 
                 print("Model saved in file: {}".format(path))
                 leela_path = path + "-" + str(steps) + ".txt"

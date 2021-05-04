@@ -2,6 +2,8 @@
 import numpy as np
 import sys
 import paddle
+paddle.disable_static()
+
 
 state = paddle.load(sys.argv[1])
 
@@ -34,13 +36,13 @@ def write_block(f, b):
     for w in b:
         f.write(' '.join(map(str, w.flatten())) + '\n')
 
-if 0:
+if 1:
     for key in state.keys():
         print(key, state[key].shape)
 
 with open('paddle_converted_weights.txt', 'w') as f:
     # version 2 means value head is for black, not for side to move
-    f.write('2\n')
+    f.write('1\n')
 
 
     b = convert_block(state, 'flow' , 1)
@@ -51,17 +53,17 @@ with open('paddle_converted_weights.txt', 'w') as f:
 
     write_block(f, b)
     for block in range(2):
-        b = convert_block(state, 'trunk.{}'.format(block), 1)
+        b = convert_block(state, 'trunk.{}.conv1'.format(block), 1)
         write_block(f, b)
-        b = convert_block(state, 'trunk.{}'.format(block), 2)
+        b = convert_block(state, 'trunk.{}.conv2'.format(block), 1)
         write_block(f, b)
     b = convert_block(state, 'conv_pol', 1)
     write_block(f, b)
-    f.write(tensor_to_str(state['fc_pol.weight']) + '\n')
+    f.write(tensor_to_str(state['fc_pol.weight'].T) + '\n')
     f.write(tensor_to_str(state['fc_pol.bias']) + '\n')
     b = convert_block(state, 'conv_val', 1)
     write_block(f, b)
-    f.write(tensor_to_str(state['fc_val_1.weight']) + '\n')
+    f.write(tensor_to_str(state['fc_val_1.weight'].T) + '\n')
     f.write(tensor_to_str(state['fc_val_1.bias']) + '\n')
-    f.write(tensor_to_str(state['fc_val_2.weight']) + '\n')
+    f.write(tensor_to_str(state['fc_val_2.weight'].T) + '\n')
     f.write(tensor_to_str(state['fc_val_2.bias']) + '\n')

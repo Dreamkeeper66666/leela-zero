@@ -40,7 +40,6 @@ BATCH_SIZE = 128
 # The maximum depends on the amount of RAM in your GPU and the network size.
 # Must be smaller than BATCH_SIZE.
 RAM_BATCH_SIZE = 128
-
 # Use a random sample input data read. This helps improve the spread of
 # games in the shuffle buffer.
 DOWN_SAMPLE = 16
@@ -155,12 +154,12 @@ def main():
         len(training), len(test)))
 
     train_parser = ChunkParser(FileDataSrc(training),
-                               shuffle_size=1<<10, # 2.2GB of RAM.
+                               shuffle_size=1<<7, # 2.2GB of RAM.
                                sample=args.sample,
                                batch_size=RAM_BATCH_SIZE).parse()
 
     test_parser = ChunkParser(FileDataSrc(test),
-                              shuffle_size=1<<9,
+                              shuffle_size=1<<6,
                               sample=args.sample,
                               batch_size=RAM_BATCH_SIZE).parse()
     
