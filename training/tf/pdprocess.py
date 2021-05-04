@@ -123,16 +123,6 @@ class Res_Block(nn.Layer):
 
         return out
 
-def build_trunk(in_channel, out_channel, num_layers):
-
-    block_list = []
-    for i in range(num_layers):
-
-        block_list.append(Res_Block(out_channel, out_channel))
-
-    trunk = nn.Sequential(*block_list) #用*号可以把list列表展开为元素
-    return trunk
-
 class ResNet(nn.Layer):
     # 继承paddle.nn.Layer定义网络结构
     def __init__(self, residual_blocks=20, residual_filters=256):
@@ -192,42 +182,9 @@ class PDProcess:
         self.model = ResNet(residual_blocks, residual_filters)
         self.l2_scale = 1e-4
         #self.optim = paddle.optimizer.Momentum(learning_rate=0.005, parameters=self.model.parameters(), momentum=0.9, use_nesterov=True, weight_decay=self.l2_scale)
-
         self.optim = paddle.optimizer.Adam(learning_rate=0.001, parameters=self.model.parameters(),weight_decay=self.l2_scale)
-
         self.batch_size = batch_size
         paddle.summary(self.model,(-1,18,19,19))
-
-        # model type: full precision (fp32) or mixed precision (fp16)
-        self.model_dtype = 'float32'
-
-        # Scale the loss to prevent gradient underflow
-        self.loss_scale = 1 if self.model_dtype == 'float32' else 128
-
-        # L2 regularization parameter applied to weights.
-
-
-        # Set number of GPUs for training
-        self.gpus_num = 1
-
-        # For exporting
-        self.weights = []
-
-        # Output weight file with averaged weights
-        self.swa_enabled = False
-
-        # Net sampling rate (e.g 2 == every 2nd network).
-        self.swa_c = 1
-
-        # Take an exponentially weighted moving average over this
-        # many networks. Under the SWA assumptions, this will reduce
-        # the distance to the optimal value by a factor of 1/sqrt(n)
-        self.swa_max_n = 16
-
-        # Recalculate SWA weight batchnorm means and variances
-        self.swa_recalc_bn = True
-
-
 
     def restore(self, file):
         print("Restoring from {0}".format(file))
@@ -251,17 +208,8 @@ class PDProcess:
         planes_t = paddle.to_tensor(planes,dtype='float32')
         probs_t = paddle.to_tensor(probs,dtype='float32')
         winner_t = paddle.to_tensor(winner,dtype='float32')
-        
-
-        #planes_t = paddle.reshape(planes_t, shape=[self.batch_size,18,19,19])
-        #probs_t = paddle.reshape(probs_t,[self.batch_size,362])
-        #winner_t = paddle.reshape(winner_t,[self.batch_size,1])
-        
 
         policy, value = model(planes_t)
-        #print(probs_t[0])
-        #print(winner_t[0])
-        #sys.exit()
         policy_loss = F.softmax_with_cross_entropy(logits=policy, label=probs_t, soft_label=True)
         value_loss = F.mse_loss(value, winner_t)
         probs_max = paddle.argmax(probs_t,axis=1,keepdim=True)
@@ -269,7 +217,7 @@ class PDProcess:
         if training:
             loss = policy_loss + value_loss
             loss.backward()
-         
+        '''
         else:
             test_array = np.zeros((1,18,19,19))
             test_array[:,17,:,:] =  np.ones((1,19,19))
@@ -279,11 +227,8 @@ class PDProcess:
             p = F.softmax(policy).numpy()[:,:-1].reshape(19,19)
             pb = p > 0.01
             print(np.array(pb, dtype=np.int))
-
             print(F.tanh(value))
-    
-
-
+        '''
 
 
         # Google's paper scales mse by 1/4 to a [0,1] range, so we do the same here
@@ -348,218 +293,7 @@ class PDProcess:
                 print("Model saved in file: {}".format(path))
 
             steps += 1
-
-    def get_batchnorm_key(self):
-        result = "bn" + str(self.batch_norm_count)
-        self.batch_norm_count += 1
-        return result
-
-    def reset_batchnorm_key(self):
-        self.batch_norm_count = 0
-        self.reuse_var = True
-
-    def add_weights(self, var):
-        if self.reuse_var is None:
-            if var.name[-11:] == "fp16_cast:0":
-                name = var.name[:-12] + ":0"
-                var = tf.get_default_graph().get_tensor_by_name(name)
-            # All trainable variables should be stored as fp32
-            assert var.dtype.base_dtype == tf.float32
-            self.weights.append(var)
-
-    def batch_norm(self, net):
-        # The weights are internal to the batchnorm layer, so apply
-        # a unique scope that we can store, and use to look them back up
-        # later on.
-        scope = self.get_batchnorm_key()
-        with tf.variable_scope(scope,
-                               custom_getter=float32_variable_storage_getter):
-            net = tf.layers.batch_normalization(
-                    net,
-                    epsilon=1e-5, axis=1, fused=True,
-                    center=True, scale=False,
-                    training=self.training,
-                    reuse=self.reuse_var)
-
-        for v in ['beta', 'moving_mean', 'moving_variance' ]:
-            name = "fp32_storage/" + scope + '/batch_normalization/' + v + ':0'
-            var = tf.get_default_graph().get_tensor_by_name(name)
-            self.add_weights(var)
-
-        return net
-
-    def conv_block(self, inputs, filter_size, input_channels, output_channels, name):
-        W_conv = weight_variable(
-            name,
-            [filter_size, filter_size, input_channels, output_channels],
-            self.model_dtype)
-
-        self.add_weights(W_conv)
-
-        net = inputs
-        net = conv2d(net, W_conv)
-        net = self.batch_norm(net)
-        net = tf.nn.relu(net)
-        return net
-
-    def residual_block(self, inputs, channels, name):
-        net = inputs
-        orig = tf.identity(net)
-
-        # First convnet weights
-        W_conv_1 = weight_variable(name + "_conv_1", [3, 3, channels, channels],
-                                   self.model_dtype)
-        self.add_weights(W_conv_1)
-
-        net = conv2d(net, W_conv_1)
-        net = self.batch_norm(net)
-        net = tf.nn.relu(net)
-
-        # Second convnet weights
-        W_conv_2 = weight_variable(name + "_conv_2", [3, 3, channels, channels],
-                                   self.model_dtype)
-        self.add_weights(W_conv_2)
-
-        net = conv2d(net, W_conv_2)
-        net = self.batch_norm(net)
-        net = tf.add(net, orig)
-        net = tf.nn.relu(net)
-
-        return net
-
-    def construct_net(self, planes):
-        # NCHW format
-        # batch, 18 channels, 19 x 19
-        x_planes = tf.reshape(planes, [-1, 18, 19, 19])
-
-        # Input convolution
-        flow = self.conv_block(x_planes, filter_size=3,
-                               input_channels=18,
-                               output_channels=self.residual_filters,
-                               name="first_conv")
-        # Residual tower
-        for i in range(0, self.residual_blocks):
-            block_name = "res_" + str(i)
-            flow = self.residual_block(flow, self.residual_filters,
-                                       name=block_name)
-
-        # Policy head
-        conv_pol = self.conv_block(flow, filter_size=1,
-                                   input_channels=self.residual_filters,
-                                   output_channels=2,
-                                   name="policy_head")
-        h_conv_pol_flat = tf.reshape(conv_pol, [-1, 2 * 19 * 19])
-        W_fc1 = weight_variable("w_fc_1", [2 * 19 * 19, (19 * 19) + 1], self.model_dtype)
-        b_fc1 = bias_variable("b_fc_1", [(19 * 19) + 1], self.model_dtype)
-        self.add_weights(W_fc1)
-        self.add_weights(b_fc1)
-        h_fc1 = tf.add(tf.matmul(h_conv_pol_flat, W_fc1), b_fc1)
-
-        # Value head
-        conv_val = self.conv_block(flow, filter_size=1,
-                                   input_channels=self.residual_filters,
-                                   output_channels=1,
-                                   name="value_head")
-        h_conv_val_flat = tf.reshape(conv_val, [-1, 19 * 19])
-        W_fc2 = weight_variable("w_fc_2", [19 * 19, 256], self.model_dtype)
-        b_fc2 = bias_variable("b_fc_2", [256], self.model_dtype)
-        self.add_weights(W_fc2)
-        self.add_weights(b_fc2)
-        h_fc2 = tf.nn.relu(tf.add(tf.matmul(h_conv_val_flat, W_fc2), b_fc2))
-        W_fc3 = weight_variable("w_fc_3", [256, 1], self.model_dtype)
-        b_fc3 = bias_variable("b_fc_3", [1], self.model_dtype)
-        self.add_weights(W_fc3)
-        self.add_weights(b_fc3)
-        h_fc3 = tf.nn.tanh(tf.add(tf.matmul(h_fc2, W_fc3), b_fc3))
-
-        return h_fc1, h_fc3
-
-    def snap_save(self):
-        # Save a snapshot of all the variables in the current graph.
-        if not hasattr(self, 'save_op'):
-            save_ops = []
-            rest_ops = []
-            for var in self.weights:
-                if isinstance(var, str):
-                    var = tf.get_default_graph().get_tensor_by_name(var)
-                name = var.name.split(':')[0]
-                v = tf.Variable(var, name='save/'+name, trainable=False)
-                save_ops.append(tf.assign(v, var))
-                rest_ops.append(tf.assign(var, v))
-            self.save_op = tf.group(*save_ops)
-            self.restore_op = tf.group(*rest_ops)
-        self.session.run(self.save_op)
-
-    def snap_restore(self):
-        # Restore variables in the current graph from the snapshot.
-        self.session.run(self.restore_op)
-
-    def save_swa_network(self, steps, path, leela_path, data):
-        # Sample 1 in self.swa_c of the networks. Compute in this way so
-        # that it's safe to change the value of self.swa_c
-        rem = self.session.run(tf.assign_add(self.swa_skip, -1))
-        if rem > 0:
-            return
-        self.swa_skip.load(self.swa_c, self.session)
-
-        # Add the current weight vars to the running average.
-        num = self.session.run(self.swa_accum_op)
-
-        if self.swa_max_n != None:
-            num = min(num, self.swa_max_n)
-            self.swa_count.load(float(num), self.session)
-
-        swa_path = path + "-swa-" + str(int(num)) + "-" + str(steps) + ".txt"
-
-        # save the current network.
-        self.snap_save()
-        # Copy the swa weights into the current network.
-        self.session.run(self.swa_load_op)
-        if self.swa_recalc_bn:
-            print("Refining SWA batch normalization")
-            for _ in range(200):
-                batch = next(data)
-                self.session.run(
-                    [self.loss, self.update_ops],
-                    feed_dict={self.training: True,
-                               self.planes: batch[0], self.probs: batch[1],
-                               self.winner: batch[2]})
-
-        self.save_leelaz_weights(swa_path)
-        # restore the saved network.
-        self.snap_restore()
-
-        print("Wrote averaged network to {}".format(swa_path))
-
-# Unit tests for TFProcess.
-def gen_block(size, f_in, f_out):
-    return [ [1.1] * size * size * f_in * f_out, # conv
-             [-.1] * f_out,  # bias weights
-             [-.2] * f_out,  # batch norm mean
-             [-.3] * f_out ] # batch norm var
-
-class TFProcessTest(unittest.TestCase):
-    def test_can_replace_weights(self):
-        tfprocess = TFProcess(6, 128)
-        tfprocess.init(batch_size=1)
-        # use known data to test replace_weights() works.
-        data = gen_block(3, 18, tfprocess.residual_filters) # input conv
-        for _ in range(tfprocess.residual_blocks):
-            data.extend(gen_block(3,
-                tfprocess.residual_filters, tfprocess.residual_filters))
-            data.extend(gen_block(3,
-                tfprocess.residual_filters, tfprocess.residual_filters))
-        # policy
-        data.extend(gen_block(1, tfprocess.residual_filters, 2))
-        data.append([0.4] * 2*19*19 * (19*19+1))
-        data.append([0.5] * (19*19+1))
-        # value
-        data.extend(gen_block(1, tfprocess.residual_filters, 1))
-        data.append([0.6] * 19*19 * 256)
-        data.append([0.7] * 256)
-        data.append([0.8] * 256)
-        data.append([0.9] * 1)
-        tfprocess.replace_weights(data)
+  
 
 if __name__ == '__main__':
     unittest.main()
